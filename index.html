@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Association des Trois Rues</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+
+<style>
+  html, body { height: 100%; margin: 0; }
+  /* Mise en page en CSS pur : la carte s'affiche même si Tailwind ne charge pas */
+  #app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+  #mapbox { position: relative; height: 50%; min-height: 250px; }
+  #panel { display: flex; flex-direction: column; height: 50%; background: #fff; box-shadow: 0 0 20px rgba(0,0,0,.15); }
+  #map { position: absolute; inset: 0; width: 100%; height: 100%; background: #e5e7eb; }
+  #maperror { display:none; position:absolute; inset:0; z-index:1200; align-items:center; justify-content:center;
+    padding:24px; text-align:center; background:#fef2f2; color:#991b1b; font-size:14px; }
+  @media (min-width: 768px) {
+    #app { flex-direction: row; }
+    #mapbox { order: 2; flex: 1; height: 100%; }
+    #panel { order: 1; width: 384px; height: 100%; }
+  }
+  .pin {
+    width: 26px; height: 26px; border-radius: 50% 50% 50% 0;
+    transform: rotate(-45deg); border: 3px solid #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,.45);
+  }
+  .pin.selected { box-shadow: 0 0 0 4px rgba(79,70,229,.55), 0 2px 6px rgba(0,0,0,.45); }
+  .pin-wrap { background: transparent; border: none; }
+  #login { position: fixed; inset: 0; z-index: 5000; display: none; align-items: center; justify-content: center; padding: 16px;
+    background: linear-gradient(135deg, #4f46e5, #0284c7); }
+  #login .card { width: 100%; max-width: 380px; background: #fff; border-radius: 16px; padding: 24px; box-shadow: 0 20px 50px rgba(0,0,0,.35); }
+  #login input[type=password], #login input[type=text] { width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 16px; letter-spacing: .08em; }
+  #login button[type=submit] { width: 100%; margin-top: 12px; padding: 12px; border: 0; border-radius: 10px; background: #4f46e5; color: #fff; font-size: 16px; font-weight: 600; cursor: pointer; }
+  #login button[disabled] { opacity: .6; cursor: wait; }
+  #loginerr { min-height: 20px; margin-top: 10px; font-size: 14px; color: #b91c1c; }
+</style>
+</head>
+
+<body class="bg-slate-100 text-slate-800 font-sans">
+<div id="login">
+  <form class="card" id="loginform" autocomplete="off">
+    <h1 style="font-size:22px;font-weight:700;margin:0">Association des Trois Rues</h1>
+    <p style="margin:6px 0 16px;color:#64748b;font-size:14px">Accès réservé aux membres. Saisissez votre code personnel.</p>
+    <input id="code" type="password" placeholder="Code personnel (ex. K7M2-9QXT)" autocapitalize="characters" spellcheck="false" required>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:14px;color:#475569">
+      <input id="remember" type="checkbox"> Rester connecté sur cet appareil
+    </label>
+    <button type="submit" id="loginbtn">Se connecter</button>
+    <div id="loginerr" role="alert"></div>
+  </form>
+</div>
+<div id="app">
+
+  <!-- Carte : en haut sur mobile, à droite sur ordinateur -->
+  <main id="mapbox">
+    <div id="map"></div>
+    <div id="maperror">La bibliothèque de cartographie (Leaflet) n'a pas pu être chargée. Vérifiez votre connexion Internet ou un éventuel bloqueur de contenu, puis rechargez la page.</div>
+    <div class="absolute bottom-6 left-3 z-[1000] bg-white/95 rounded-lg shadow px-3 py-2 text-xs space-y-1">
+      <div class="flex items-center gap-2"><span class="inline-block w-3 h-3 rounded-full bg-emerald-500"></span>Adhérent, cotisation payée</div>
+      <div class="flex items-center gap-2"><span class="inline-block w-3 h-3 rounded-full bg-amber-500"></span>Adhérent, cotisation à régler</div>
+      <div class="flex items-center gap-2"><span class="inline-block w-3 h-3 rounded-full bg-slate-400"></span>Non adhérent</div>
+    </div>
+  </main>
+
+  <!-- Panneau latéral : en bas sur mobile, à gauche sur ordinateur -->
+  <aside id="panel" class="z-10">
+    <header class="p-4 bg-gradient-to-r from-indigo-600 to-sky-600 text-white">
+      <h1 class="text-xl font-bold leading-tight">Association des Trois Rues</h1>
+      <p class="text-xs text-indigo-100 mt-1">Rues Joseph Boussin, Honoré Commeurec et de la Pilate<br>Saint-Jacques-de-la-Lande</p>
+      <p id="session" class="hidden text-xs text-indigo-100 mt-2">Connecté : <span id="who" class="font-semibold"></span><span id="myfilewrap" class="hidden"> · <button id="myfile" type="button" class="underline">Ma fiche</button></span> · <button id="logout" type="button" class="underline">Se déconnecter</button></p>
+    </header>
+
+    <div class="p-3 border-b border-slate-200">
+      <div class="relative">
+        <svg class="w-4 h-4 absolute left-3 top-3 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="search" type="search" autocomplete="off"
+          placeholder="Nom, prénom, matériel, compétence…"
+          class="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+      </div>
+      <p id="count" class="text-xs text-slate-500 mt-2"></p>
+      <p id="datawarn" class="hidden text-xs mt-2 px-2 py-1.5 rounded bg-amber-100 text-amber-800"></p>
+    </div>
+
+    <section id="details" class="flex-1 overflow-y-auto p-4"></section>
+  </aside>
+</div>
+
+<script>
+window.addEventListener("error", e => {
+  const box = document.getElementById("maperror");
+  if (box) { box.style.display = "flex"; box.textContent = "Erreur : " + e.message; }
+});
+</script>
+<script>
+/* ============ CONFIGURATION ============ */
+// Collez ici l'URL de déploiement de votre Apps Script (elle se termine par /exec).
+// Tant que ce n'est pas fait, la page fonctionne en mode démonstration (données fictives, sans connexion).
+const API_URL = "https://script.google.com/macros/s/AKfycbxRfGT-XU6t6ruQwq7VQd_IeiX8d2Uy9P3WYZtg5m90o1dajg4SkkCL0RYhh4z6nZlU/exec";
+
+// Données fictives du mode démonstration.
+const sampleCsv = `ID,Nom,Prénom,Adresse,Email,Téléphone,Adhérent,Cotisation payée,Matériel à disposition,Compétences,Latitude,Longitude
+1,Martin,Claire,12 rue Joseph Boussin,claire.martin@example.com,06 12 34 56 78,Oui,Oui,"Tondeuse, taille-haie, échelle","Jardinage, petit bricolage",48.0893,-1.7225
+2,Le Gall,Yann,5 rue de Honoré Commeurec,yann.legall@example.com,06 98 76 54 32,Oui,Non,"Perceuse, remorque","Électricité, informatique",48.0886,-1.7212
+3,Dubois,Sophie,8 rue de la Pilate,sophie.dubois@example.com,02 99 12 34 56,Non,Non,Barnum et tables,"Cuisine, organisation d'événements",48.0899,-1.7231`;
+
+const DEFAULT_CENTER = [48.089, -1.722];
+const DEFAULT_ZOOM = 16;
+
+/* ============ OUTILS ============ */
+const norm = s => (s || "").toString().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+const esc = s => (s || "").toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const isYes = v => ["oui", "yes", "o", "y", "true", "1", "x"].includes(norm(v));
+const toNum = v => parseFloat((v || "").toString().replace(",", "."));
+
+/* ============ CARTE ============ */
+if (typeof L === "undefined") {
+  document.getElementById("maperror").style.display = "flex";
+  throw new Error("Leaflet non chargé");
+}
+const map = L.map("map", { zoomControl: true }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+window.addEventListener("load", () => { map.invalidateSize(); setTimeout(() => map.invalidateSize(), 300); });
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/";
+const ATTR = "Tuiles &copy; Esri, Maxar, Earthstar Geographics, HERE, Garmin, OpenStreetMap contributors";
+const tl = (path, opts) => L.tileLayer(ESRI + path + "/MapServer/tile/{z}/{y}/{x}", Object.assign({ maxZoom: 20, maxNativeZoom: 19, attribution: ATTR }, opts));
+
+// Fonds de carte IGN (Géoplateforme) : gratuits, sans clé, très détaillés en France
+const IGN = "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&STYLE=normal&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}";
+const ign = (layer, fmt, opts) => L.tileLayer(IGN + "&LAYER=" + layer + "&FORMAT=" + fmt,
+  Object.assign({ maxZoom: 20, maxNativeZoom: 19, attribution: "&copy; IGN-F / Géoplateforme" }, opts));
+
+// 1. Photo aérienne IGN (définition ~20 cm) + noms de rues et lieux par-dessus
+const satelliteIGN = L.layerGroup([
+  ign("ORTHOIMAGERY.ORTHOPHOTOS", "image/jpeg"),
+  tl("Reference/World_Transportation"),
+  tl("Reference/World_Boundaries_and_Places")
+]);
+// 2. OpenStreetMap
+const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; contributeurs OpenStreetMap" });
+satelliteIGN.addTo(map);
+L.control.layers({
+  "🛰️ Satellite (IGN)": satelliteIGN,
+  "🧭 OpenStreetMap": osm
+}, null, { position: "topright", collapsed: true }).addTo(map);
+
+// Avertissement si les tuiles ne se chargent pas (réseau ou blocage)
+let tileErrors = 0;
+[satelliteIGN, osm].forEach(layer => {
+  const layers = layer.getLayers ? layer.getLayers() : [layer];
+  layers.forEach(l => l.on("tileerror", () => {
+    if (++tileErrors === 8) {
+      const n = document.createElement("div");
+      n.style.cssText = "position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:1100;background:#fff7ed;color:#9a3412;border:1px solid #fdba74;border-radius:8px;padding:6px 10px;font-size:12px;max-width:80%;text-align:center";
+      n.textContent = "Le fond de carte ne se charge pas : essayez un autre fond avec le bouton en haut à droite.";
+      document.getElementById("mapbox").appendChild(n);
+    }
+  }));
+});
+window.addEventListener("resize", () => map.invalidateSize());
+
+const markerLayer = L.layerGroup().addTo(map);
+let neighbors = [];
+let meId = "";        // identifiant de ma fiche (renvoyé par le serveur)
+let currentCode = ""; // code de la session, conservé en mémoire pour enregistrer mes modifications
+let selectedId = null;
+
+/* ============ DONNÉES ============ */
+// Mini-parseur CSV (guillemets, virgules ou points-virgules, CRLF, BOM)
+function csvToRows(text) {
+  text = text.replace(/^\uFEFF/, "");
+  const firstLine = text.split(/\r?\n/)[0] || "";
+  const sep = (firstLine.match(/;/g) || []).length > (firstLine.match(/,/g) || []).length ? ";" : ",";
+  const rows = []; let row = [], cur = "", inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+      else cur += c;
+    } else if (c === '"') inQ = true;
+    else if (c === sep) { row.push(cur); cur = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(cur); cur = "";
+      if (row.some(x => x.trim() !== "")) rows.push(row);
+      row = [];
+    } else cur += c;
+  }
+  row.push(cur);
+  if (row.some(x => x.trim() !== "")) rows.push(row);
+  return rows;
+}
+
+function parseCsv(text) {
+  const rows = csvToRows(text.trim());
+  if (rows.length < 2) return [];
+  const head = rows[0].map(norm);
+  return rows.slice(1).map((cells, i) => {
+    const r = {};
+    head.forEach((k, j) => r[k] = (cells[j] || "").trim());
+    return {
+      id: r["id"] || String(i + 1),
+      nom: r["nom"] || "",
+      prenom: r["prenom"] || "",
+      adresse: r["adresse"] || "",
+      email: r["email"] || "",
+      tel: r["telephone"] || "",
+      adherent: isYes(r["adherent"]),
+      cotisation: isYes(r["cotisation payee"]),
+      materiel: r["materiel a disposition"] || "",
+      competences: r["competences"] || "",
+      lat: toNum(r["latitude"]),
+      lng: toNum(r["longitude"])
+    };
+  }).filter(n => n.nom || n.prenom);
+}
+
+/* ============ GÉOCODAGE (adresse -> coordonnées) ============ */
+// Service public gratuit de la Base Adresse Nationale (sans clé d'API).
+const GEOCODER = "https://data.geopf.fr/geocodage/search/";
+const DEFAULT_CITY = "35136 Saint-Jacques-de-la-Lande"; // ajouté si l'adresse n'indique pas de ville
+const CACHE_KEY = "trois-rues-geocache-v1";
+let geoCache = {};
+try { geoCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}"); } catch (e) {}
+const saveCache = () => { try { localStorage.setItem(CACHE_KEY, JSON.stringify(geoCache)); } catch (e) {} };
+
+async function geocode(address) {
+  const q = /\d{5}|saint-jacques/i.test(address) ? address : address + ", " + DEFAULT_CITY;
+  if (geoCache[q]) return geoCache[q];
+  const url = GEOCODER + "?limit=1&lat=" + DEFAULT_CENTER[0] + "&lon=" + DEFAULT_CENTER[1] + "&q=" + encodeURIComponent(q);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const j = await r.json();
+  const f = j.features && j.features[0];
+  if (!f || (f.properties && f.properties.score < 0.4)) return null;
+  const res = { lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], label: f.properties.label };
+  geoCache[q] = res; saveCache();
+  return res;
+}
+
+// Géocode en parallèle (par lots) les voisins sans latitude/longitude
+async function geocodeMissing(list) {
+  const todo = list.filter(n => (isNaN(n.lat) || isNaN(n.lng)) && n.adresse);
+  const failed = [];
+  for (let i = 0; i < todo.length; i += 5) {
+    await Promise.all(todo.slice(i, i + 5).map(async n => {
+      try {
+        const g = await geocode(n.adresse);
+        if (g) { n.lat = g.lat; n.lng = g.lng; } else failed.push(n.adresse);
+      } catch (e) { failed.push(n.adresse); }
+    }));
+  }
+  if (failed.length) warn("Adresse(s) introuvable(s) : " + failed.join(" ; ") + ". Vérifiez l'orthographe ou saisissez latitude/longitude.");
+}
+
+function warn(msg) {
+  const el = document.getElementById("datawarn");
+  el.textContent = msg; el.classList.remove("hidden");
+}
+
+/* ============ CONNEXION PAR CODE PERSONNEL ============ */
+const DEMO = !API_URL || API_URL.includes("COLLEZ_ICI");
+const STORE_KEY = "trois-rues-code";
+
+function getStored() { try { return localStorage.getItem(STORE_KEY) || sessionStorage.getItem(STORE_KEY) || ""; } catch (e) { return ""; } }
+function clearStored() { try { localStorage.removeItem(STORE_KEY); sessionStorage.removeItem(STORE_KEY); } catch (e) {} }
+function setStored(code, remember) {
+  clearStored();
+  try { (remember ? localStorage : sessionStorage).setItem(STORE_KEY, code); } catch (e) {}
+}
+
+// Le code est vérifié côté serveur (Apps Script) : sans code valide, aucune donnée n'est envoyée.
+async function callApi(code, extra) {
+  const r = await fetch(API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(Object.assign({ code }, extra || {}))
+  });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+const ERRORS = {
+  code: "Code incorrect ou désactivé.",
+  verrouille: "Trop d'essais. Réessayez dans quelques minutes.",
+  donnees: "Onglet de données introuvable dans le Google Sheet.",
+  pas_de_fiche: "Votre code n'est pas encore rattaché à une fiche. Contactez l'administrateur.",
+  occupe: "Le serveur est occupé, réessayez dans un instant.",
+  invalide: "Valeur refusée."
+};
+const FIELD_LABELS = { adresse: "l'adresse", email: "l'adresse e-mail", tel: "le téléphone", materiel: "le matériel", competences: "les compétences" };
+
+function showLogin(msg) {
+  document.getElementById("login").style.display = "flex";
+  document.getElementById("loginerr").textContent = msg || "";
+  setTimeout(() => document.getElementById("code").focus(), 50);
+}
+
+async function startSession(code, remember, silent) {
+  const btn = document.getElementById("loginbtn");
+  btn.disabled = true; btn.textContent = "Connexion…";
+  try {
+    const j = await callApi(code);
+    if (!j.ok) {
+      clearStored();
+      showLogin(silent ? "" : (ERRORS[j.error] || "Connexion refusée."));
+      return;
+    }
+    neighbors = parseCsv(j.csv);
+    await geocodeMissing(neighbors);
+    currentCode = code;
+    meId = String(j.me || "");
+    document.getElementById("myfilewrap").classList.toggle("hidden", !meId);
+    setStored(code, remember);
+    document.getElementById("who").textContent = j.name || "";
+    document.getElementById("session").classList.remove("hidden");
+    document.getElementById("login").style.display = "none";
+    init();
+    setTimeout(() => map.invalidateSize(), 100);
+  } catch (e) {
+    console.warn("Connexion impossible :", e);
+    showLogin("Impossible de joindre le serveur. Vérifiez votre connexion et réessayez.");
+  } finally {
+    btn.disabled = false; btn.textContent = "Se connecter";
+  }
+}
+
+async function loadData() {
+  if (DEMO) {
+    neighbors = parseCsv(sampleCsv);
+    await geocodeMissing(neighbors);
+    init();
+    warn("Mode démonstration : données fictives, sans connexion. Renseignez API_URL pour utiliser votre Google Sheet.");
+    return;
+  }
+  document.getElementById("loginform").addEventListener("submit", ev => {
+    ev.preventDefault();
+    startSession(document.getElementById("code").value.trim(), document.getElementById("remember").checked, false);
+  });
+  document.getElementById("logout").addEventListener("click", () => { clearStored(); location.reload(); });
+  document.getElementById("myfile").addEventListener("click", () => { if (meId) select(meId, true); });
+
+  const saved = getStored();
+  if (saved) startSession(saved, !!localStorage.getItem(STORE_KEY), true);
+  else showLogin();
+}
+
+/* ============ MARQUEURS ============ */
+function colorOf(n) {
+  if (n.adherent && n.cotisation) return "#10b981";
+  if (n.adherent) return "#f59e0b";
+  return "#94a3b8";
+}
+
+function makeIcon(n, selected) {
+  return L.divIcon({
+    className: "pin-wrap",
+    html: `<div class="pin ${selected ? "selected" : ""}" style="background:${colorOf(n)}"></div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 26]
+  });
+}
+
+function matches(n, q) {
+  if (!q) return true;
+  const hay = norm([n.nom, n.prenom, n.materiel, n.competences].join(" "));
+  return q.split(/\s+/).every(w => hay.includes(w));
+}
+
+function render(fit) {
+  const q = norm(document.getElementById("search").value);
+  markerLayer.clearLayers();
+  const visible = neighbors.filter(n => matches(n, q));
+  const pts = [];
+
+  visible.forEach(n => {
+    if (isNaN(n.lat) || isNaN(n.lng)) return;
+    const m = L.marker([n.lat, n.lng], { icon: makeIcon(n, n.id === selectedId), title: `${n.prenom} ${n.nom}` });
+    m.on("click", () => select(n.id));
+    m.addTo(markerLayer);
+    pts.push([n.lat, n.lng]);
+  });
+
+  const total = neighbors.filter(n => !isNaN(n.lat) && !isNaN(n.lng)).length;
+  document.getElementById("count").textContent =
+    q ? `${pts.length} résultat(s) sur ${total} voisin(s) localisé(s)` : `${total} voisin(s) sur la carte`;
+
+  if (fit) {
+    if (pts.length) map.fitBounds(pts, { padding: [60, 60], maxZoom: 18 });
+    else if (!q) map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+  }
+
+  if (!selectedId) showWelcome(visible);
+}
+
+/* ============ PANNEAU DE DÉTAILS ============ */
+function badge(label, ok) {
+  const cls = ok ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800";
+  return `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${cls}">
+    <span>${ok ? "✔" : "✖"}</span>${label} : ${ok ? "Oui" : "Non"}</span>`;
+}
+
+function chips(text, cls) {
+  const items = (text || "").split(/[,;]/).map(s => s.trim()).filter(Boolean);
+  if (!items.length) return `<p class="text-sm text-slate-400 italic">Non renseigné</p>`;
+  return `<div class="flex flex-wrap gap-1.5">${items.map(i => `<span class="px-2 py-0.5 rounded-md text-xs ${cls}">${esc(i)}</span>`).join("")}</div>`;
+}
+
+function showWelcome(list) {
+  const el = document.getElementById("details");
+  if (!list.length) {
+    el.innerHTML = `<p class="text-sm text-slate-500">Aucun voisin ne correspond à cette recherche.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <p class="text-sm text-slate-500 mb-3">Cliquez sur un marqueur ou sur un nom pour afficher la fiche.</p>
+    <ul class="divide-y divide-slate-100">
+      ${list.map(n => `
+        <li>
+          <button data-id="${esc(n.id)}" class="w-full text-left py-2 px-1 hover:bg-slate-50 rounded flex items-center gap-3">
+            <span class="w-3 h-3 rounded-full shrink-0" style="background:${colorOf(n)}"></span>
+            <span><span class="font-medium">${esc(n.prenom)} ${esc(n.nom)}</span><br>
+            <span class="text-xs text-slate-500">${esc(n.adresse)}</span></span>
+          </button>
+        </li>`).join("")}
+    </ul>`;
+  el.querySelectorAll("button[data-id]").forEach(b => b.addEventListener("click", () => select(b.dataset.id, true)));
+}
+
+function select(id, pan) {
+  const n = neighbors.find(x => x.id === id);
+  if (!n) return;
+  selectedId = id;
+  render(false);
+  if (pan && !isNaN(n.lat)) map.setView([n.lat, n.lng], Math.max(map.getZoom(), 17));
+
+  const tel = n.tel.replace(/[^\d+]/g, "");
+  document.getElementById("details").innerHTML = `
+    <button id="back" class="text-sm text-indigo-600 hover:underline mb-3">← Retour à la liste</button>
+    ${meId && n.id === meId ? `<div class="mb-3 p-3 rounded-lg bg-indigo-50 text-indigo-900 text-sm flex items-center justify-between gap-2"><span>C'est votre fiche.</span><button id="editme" type="button" class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium">✏️ Modifier</button></div>` : ""}
+    <h2 class="text-2xl font-bold">${esc(n.prenom)} ${esc(n.nom)}</h2>
+    <p class="text-slate-500 mt-1 flex items-start gap-2"><span>📍</span><span>${esc(n.adresse) || "Adresse non renseignée"}</span></p>
+
+    <div class="flex flex-wrap gap-2 mt-4">
+      ${badge("Adhérent", n.adherent)}
+      ${badge("Cotisation payée", n.cotisation)}
+    </div>
+
+    <div class="mt-5 space-y-2 text-sm">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400">Contact</h3>
+      ${n.email ? `<p>✉️ <a class="text-indigo-600 hover:underline break-all" href="mailto:${esc(n.email)}">${esc(n.email)}</a></p>` : ""}
+      ${n.tel ? `<p>📞 <a class="text-indigo-600 hover:underline" href="tel:${esc(tel)}">${esc(n.tel)}</a></p>` : ""}
+      ${!n.email && !n.tel ? `<p class="text-slate-400 italic">Aucun contact renseigné</p>` : ""}
+    </div>
+
+    <div class="mt-5">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Matériel à disposition</h3>
+      ${chips(n.materiel, "bg-sky-100 text-sky-800")}
+    </div>
+
+    <div class="mt-5">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Compétences</h3>
+      ${chips(n.competences, "bg-violet-100 text-violet-800")}
+    </div>`;
+  document.getElementById("back").addEventListener("click", () => { selectedId = null; render(false); });
+  const em = document.getElementById("editme");
+  if (em) em.addEventListener("click", () => showEdit(n));
+}
+
+/* ============ MODIFICATION DE MA FICHE ============ */
+const splitList = t => (t || "").split(/[,;]/).map(s => s.trim()).filter(Boolean);
+
+function toast(msg) {
+  let t = document.getElementById("toast");
+  if (!t) {
+    t = document.createElement("div"); t.id = "toast";
+    t.style.cssText = "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:6000;background:#065f46;color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;box-shadow:0 6px 20px rgba(0,0,0,.3)";
+    document.body.appendChild(t);
+  }
+  t.textContent = msg; t.style.display = "block";
+  clearTimeout(t._h); t._h = setTimeout(() => { t.style.display = "none"; }, 3000);
+}
+
+// Éditeur de liste : chaque élément est supprimable (✕), un champ permet d'en ajouter.
+function chipEditor(host, items, placeholder, chipCls) {
+  let list = items.slice();
+  host.innerHTML = `<div data-chips class="flex flex-wrap gap-1.5 mb-2"></div>
+    <div class="flex gap-2">
+      <input type="text" maxlength="60" placeholder="${esc(placeholder)}" class="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-300 text-sm">
+      <button type="button" data-add class="px-3 py-2 rounded-lg bg-slate-200 hover:bg-slate-300 text-sm font-medium">Ajouter</button>
+    </div>`;
+  const box = host.querySelector("[data-chips]"), input = host.querySelector("input"), addBtn = host.querySelector("[data-add]");
+  const draw = () => {
+    box.innerHTML = list.length
+      ? list.map((x, i) => `<span class="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md text-xs ${chipCls}">${esc(x)}<button type="button" data-i="${i}" aria-label="Supprimer ${esc(x)}" class="px-1 font-bold">✕</button></span>`).join("")
+      : `<span class="text-sm text-slate-400 italic">Aucun élément</span>`;
+    box.querySelectorAll("button[data-i]").forEach(b => b.addEventListener("click", () => { list.splice(+b.dataset.i, 1); draw(); }));
+  };
+  const add = () => {
+    const v = input.value.trim().replace(/[,;]/g, " ");
+    if (v && !list.some(x => x.toLowerCase() === v.toLowerCase())) list.push(v);
+    input.value = ""; draw();
+  };
+  addBtn.addEventListener("click", () => { add(); input.focus(); });
+  input.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); add(); } });
+  draw();
+  return { get: () => { add(); return list.slice(); } }; // ajoute aussi le texte resté dans le champ
+}
+
+function showEdit(n) {
+  const field = (id, label, value, type, extra) => `
+    <label class="block mt-4 text-xs font-semibold uppercase tracking-wide text-slate-400" for="${id}">${label}</label>
+    <input id="${id}" type="${type}" value="${esc(value)}" ${extra || ""} class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 text-sm normal-case font-normal text-slate-800">`;
+  document.getElementById("details").innerHTML = `
+    <form id="editform" novalidate>
+      <h2 class="text-xl font-bold">Modifier ma fiche</h2>
+      <p class="text-sm text-slate-500 mt-1">${esc(n.prenom)} ${esc(n.nom)}. Le nom, le statut d'adhérent et la cotisation sont gérés par l'administrateur.</p>
+      ${field("f-adresse", "Adresse", n.adresse, "text", 'maxlength="120" autocomplete="street-address"')}
+      ${field("f-email", "E-mail", n.email, "email", 'maxlength="120" autocomplete="email"')}
+      ${field("f-tel", "Téléphone", n.tel, "tel", 'maxlength="20" autocomplete="tel"')}
+      <div class="mt-4"><div class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">Matériel à disposition</div><div id="f-materiel"></div></div>
+      <div class="mt-4"><div class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">Compétences</div><div id="f-competences"></div></div>
+      <p id="editerr" class="mt-4 text-sm text-red-700" role="alert"></p>
+      <div class="mt-3 flex gap-2">
+        <button type="submit" id="savebtn" class="flex-1 px-4 py-2.5 rounded-lg bg-indigo-600 text-white font-semibold">Enregistrer</button>
+        <button type="button" id="cancelbtn" class="px-4 py-2.5 rounded-lg bg-slate-200 font-medium">Annuler</button>
+      </div>
+    </form>`;
+  const mat = chipEditor(document.getElementById("f-materiel"), splitList(n.materiel), "Ex. perceuse", "bg-sky-100 text-sky-800");
+  const comp = chipEditor(document.getElementById("f-competences"), splitList(n.competences), "Ex. jardinage", "bg-violet-100 text-violet-800");
+  document.getElementById("cancelbtn").addEventListener("click", () => select(n.id));
+
+  document.getElementById("editform").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const fields = {
+      adresse: document.getElementById("f-adresse").value.trim(),
+      email: document.getElementById("f-email").value.trim(),
+      tel: document.getElementById("f-tel").value.trim(),
+      materiel: mat.get().join(", "),
+      competences: comp.get().join(", ")
+    };
+    const err = document.getElementById("editerr"), btn = document.getElementById("savebtn");
+    err.textContent = "";
+    if (fields.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.email)) { err.textContent = "L'adresse e-mail n'est pas valide."; return; }
+    if (fields.tel && !/^[0-9+().\s-]{6,20}$/.test(fields.tel)) { err.textContent = "Le numéro de téléphone n'est pas valide."; return; }
+    btn.disabled = true; btn.textContent = "Enregistrement…";
+    try {
+      const j = await callApi(currentCode, { action: "update", fields });
+      if (!j.ok) {
+        err.textContent = j.error === "invalide"
+          ? "Valeur refusée pour " + (FIELD_LABELS[j.champ] || "un champ") + "."
+          : (ERRORS[j.error] || "Enregistrement refusé.");
+        return;
+      }
+      const addrChanged = fields.adresse !== n.adresse;
+      Object.assign(n, { adresse: fields.adresse, email: fields.email, tel: fields.tel, materiel: fields.materiel, competences: fields.competences });
+      if (addrChanged) { n.lat = NaN; n.lng = NaN; await geocodeMissing([n]); }
+      select(n.id, true);
+      toast("Modifications enregistrées ✔");
+    } catch (e) {
+      console.warn(e);
+      err.textContent = "Impossible de joindre le serveur. Réessayez.";
+    } finally {
+      btn.disabled = false; btn.textContent = "Enregistrer";
+    }
+  });
+}
+
+/* ============ INITIALISATION ============ */
+let inited = false;
+function init() {
+  if (inited) return;
+  inited = true;
+  render(true);
+  document.getElementById("search").addEventListener("input", () => { selectedId = null; render(true); });
+}
+loadData();
+</script>
+</body>
+</html>
