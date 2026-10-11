@@ -60,9 +60,8 @@
     <div id="map"></div>
     <div id="maperror">La bibliothèque de cartographie (Leaflet) n'a pas pu être chargée. Vérifiez votre connexion Internet ou un éventuel bloqueur de contenu, puis rechargez la page.</div>
     <div class="absolute bottom-6 left-3 z-[1000] bg-white/95 rounded-lg shadow px-3 py-2 text-xs space-y-1">
-      <div class="flex items-center gap-2"><span class="inline-block w-3 h-3 rounded-full bg-emerald-500"></span>Adhérent, cotisation payée</div>
-      <div class="flex items-center gap-2"><span class="inline-block w-3 h-3 rounded-full bg-amber-500"></span>Adhérent, cotisation à régler</div>
-      <div class="flex items-center gap-2"><span class="inline-block w-3 h-3 rounded-full bg-slate-400"></span>Non adhérent</div>
+      <div class="flex items-center gap-2"><span class="inline-block w-3 h-3 rounded-full" style="background:#4f46e5"></span>Voisins</div>
+      <div id="legend-me" class="hidden flex items-center gap-2"><span class="inline-block w-3 h-3 rounded-full" style="background:#10b981"></span>Ma fiche</div>
     </div>
   </main>
 
@@ -102,10 +101,10 @@ window.addEventListener("error", e => {
 const API_URL = "https://script.google.com/macros/s/AKfycbxRfGT-XU6t6ruQwq7VQd_IeiX8d2Uy9P3WYZtg5m90o1dajg4SkkCL0RYhh4z6nZlU/exec";
 
 // Données fictives du mode démonstration.
-const sampleCsv = `ID,Nom,Prénom,Adresse,Email,Téléphone,Adhérent,Cotisation payée,Matériel à disposition,Compétences,Latitude,Longitude
-1,Martin,Claire,12 rue Joseph Boussin,claire.martin@example.com,06 12 34 56 78,Oui,Oui,"Tondeuse, taille-haie, échelle","Jardinage, petit bricolage",48.0893,-1.7225
-2,Le Gall,Yann,5 rue Honoré Commeurec,yann.legall@example.com,06 98 76 54 32,Oui,Non,"Perceuse, remorque","Électricité, informatique",48.0886,-1.7212
-3,Dubois,Sophie,8 rue de la Pilate,sophie.dubois@example.com,02 99 12 34 56,Non,Non,Barnum et tables,"Cuisine, organisation d'événements",48.0899,-1.7231`;
+const sampleCsv = `ID,Nom,Prénom,Adresse,Email,Téléphone,Matériel à disposition,Compétences,Latitude,Longitude
+1,Martin,Claire,12 rue Joseph Boussin,claire.martin@example.com,06 12 34 56 78,"Tondeuse, taille-haie, échelle","Jardinage, petit bricolage",48.0893,-1.7225
+2,Le Gall,Yann,5 rue Honoré Commeurec,yann.legall@example.com,06 98 76 54 32,"Perceuse, remorque","Électricité, informatique",48.0886,-1.7212
+3,Dubois,Sophie,8 rue de la Pilate,sophie.dubois@example.com,02 99 12 34 56,Barnum et tables,"Cuisine, organisation d'événements",48.0899,-1.7231`;
 
 const DEFAULT_CENTER = [48.089, -1.722];
 const DEFAULT_ZOOM = 16;
@@ -207,8 +206,6 @@ function parseCsv(text) {
       adresse: r["adresse"] || "",
       email: r["email"] || "",
       tel: r["telephone"] || "",
-      adherent: isYes(r["adherent"]),
-      cotisation: isYes(r["cotisation payee"]),
       materiel: r["materiel a disposition"] || "",
       competences: r["competences"] || "",
       lat: toNum(r["latitude"]),
@@ -289,6 +286,7 @@ const ERRORS = {
   pas_de_fiche: "Votre code n'est pas encore rattaché à une fiche. Contactez l'administrateur.",
   occupe: "Le serveur est occupé, réessayez dans un instant.",
   invalide: "Valeur refusée.",
+  colonne_actif: "La colonne « Actif » est introuvable dans l'onglet de données du Google Sheet.",
   format: "Le code doit faire 10 à 40 caractères : lettres sans accents et chiffres uniquement (pas d'espace ni de symbole).",
   faible: "Code trop simple : il faut au moins une lettre et un chiffre, et pas de mot courant (azerty, password…).",
   identique: "Le nouveau code doit être différent de l'ancien.",
@@ -317,6 +315,7 @@ async function startSession(code, remember, silent) {
     currentCode = code;
     meId = String(j.me || "");
     document.getElementById("myfilewrap").classList.toggle("hidden", !meId);
+    document.getElementById("legend-me").classList.toggle("hidden", !meId);
     setStored(code, remember);
     document.getElementById("who").textContent = j.name || "";
     document.getElementById("session").classList.remove("hidden");
@@ -354,9 +353,7 @@ async function loadData() {
 
 /* ============ MARQUEURS ============ */
 function colorOf(n) {
-  if (n.adherent && n.cotisation) return "#10b981";
-  if (n.adherent) return "#f59e0b";
-  return "#94a3b8";
+  return meId && n.id === meId ? "#10b981" : "#4f46e5"; // ma fiche en vert, les autres en indigo
 }
 
 function makeIcon(n, selected) {
@@ -401,12 +398,6 @@ function render(fit) {
 }
 
 /* ============ PANNEAU DE DÉTAILS ============ */
-function badge(label, ok) {
-  const cls = ok ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800";
-  return `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${cls}">
-    <span>${ok ? "✔" : "✖"}</span>${label} : ${ok ? "Oui" : "Non"}</span>`;
-}
-
 function chips(text, cls) {
   const items = (text || "").split(/[,;]/).map(s => s.trim()).filter(Boolean);
   if (!items.length) return `<p class="text-sm text-slate-400 italic">Non renseigné</p>`;
@@ -447,11 +438,6 @@ function select(id, pan) {
     ${meId && n.id === meId ? `<div class="mb-3 p-3 rounded-lg bg-indigo-50 text-indigo-900 text-sm flex items-center justify-between gap-2"><span>C'est votre fiche.</span><button id="editme" type="button" class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium">✏️ Modifier</button></div>` : ""}
     <h2 class="text-2xl font-bold">${esc(n.prenom)} ${esc(n.nom)}</h2>
     <p class="text-slate-500 mt-1 flex items-start gap-2"><span>📍</span><span>${esc(n.adresse) || "Adresse non renseignée"}</span></p>
-
-    <div class="flex flex-wrap gap-2 mt-4">
-      ${badge("Adhérent", n.adherent)}
-      ${badge("Cotisation payée", n.cotisation)}
-    </div>
 
     <div class="mt-5 space-y-2 text-sm">
       <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400">Contact</h3>
@@ -575,7 +561,7 @@ function showEdit(n) {
   document.getElementById("details").innerHTML = `
     <form id="editform" novalidate>
       <h2 class="text-xl font-bold">Modifier ma fiche</h2>
-      <p class="text-sm text-slate-500 mt-1">${esc(n.prenom)} ${esc(n.nom)}. Le nom, le statut d'adhérent et la cotisation sont gérés par l'administrateur.</p>
+      <p class="text-sm text-slate-500 mt-1">${esc(n.prenom)} ${esc(n.nom)}. Le nom et le prénom sont gérés par l'administrateur.</p>
       ${field("f-adresse", "Adresse", n.adresse, "text", 'maxlength="120" autocomplete="street-address"')}
       ${field("f-email", "E-mail", n.email, "email", 'maxlength="120" autocomplete="email"')}
       ${field("f-tel", "Téléphone", n.tel, "tel", 'maxlength="20" autocomplete="tel"')}
